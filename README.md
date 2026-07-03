@@ -10,3 +10,6 @@ Funcionalidades atuais:
 - Digitação de texto
 - Comunicação TCP
 - Aplicativo Android em desenvolvimento
+    1.  Desenvolvimento do Controle Remoto do Mouse Concluído
+    2.  Desenvolvimento do Controle Remoto do Teclado (Atual)
+    3.  Desenvolvimento da Recepção da Tela do Computador (Futuro)
