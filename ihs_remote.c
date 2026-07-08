@@ -285,7 +285,6 @@ static int tcp_server_thread(void *data)
     int ret;
     struct kvec vec; //descreve para onde os bytes serão copiados.
     struct msghdr msg = {0}; //Estrutura da mensagem
-
     char buffer[128]; //buffer para colocar as mensagens
 
     vec.iov_base = buffer;
@@ -300,73 +299,82 @@ static int tcp_server_thread(void *data)
 
 
 
-    while(!kthread_should_stop())
+    while (!kthread_should_stop())
+{
+    ret = kernel_accept(server_socket, &client_socket, 0);
+
+    if (ret) {
+        if (kthread_should_stop() || ret == -EINTR || ret == -EBADF)
+            break;
+        continue;
+    }
+
+    bool autenticado = false;
+
+    printk(KERN_INFO "Cliente conectado!\n");
+
+    while (!kthread_should_stop())
     {
-
-        ret = kernel_accept(
-            server_socket,
-            &client_socket,
-            0
-        );
-
-        if(ret){
-
-            if(kthread_should_stop())
-                break;
-
-            continue;
-        }
-
-        printk(KERN_INFO "Cliente conectado!\n");
-
-        while(!kthread_should_stop())
-        {
-            ret = kernel_recvmsg(
+        ret = kernel_recvmsg(
                 client_socket,
                 &msg,
                 &vec,
                 1,
-                sizeof(buffer) - 1,
-                0
-            );
+                sizeof(buffer)-1,
+                0);
 
-            if(ret <= 0)
-            {
-                printk(KERN_INFO "Cliente desconectou\n");
-                break;
-            }
-
-            buffer[ret] = '\0';
-
-            char *ptr = buffer;
-            char *cmd;
-
-            while ((cmd = strsep(&ptr, "\n")) != NULL)
-            {
-                size_t len = strlen(cmd);
-            
-                if (len == 0)
-                    continue;
-            
-                if (cmd[len-1] == '\r')
-                    cmd[len-1] = '\0';
-            
-                printk(KERN_INFO "%s\n", cmd);
-                parser_command(cmd);
-            }
+        if (ret <= 0) {
+            printk(KERN_INFO "Cliente desconectou\n\n");
+            break;
         }
 
-        if (client_socket)
+        buffer[ret] = '\0';
+
+        char *ptr = buffer;
+        char *cmd;
+
+        while ((cmd = strsep(&ptr, "\n")) != NULL)
         {
-            sock_release(client_socket);
-            client_socket = NULL;
+            size_t len = strlen(cmd);
+
+            if (len == 0)
+                continue;
+
+            if (cmd[len-1] == '\r')
+                cmd[len-1] = '\0';
+
+            if (!autenticado)
+            {
+                if (strcmp(cmd, "AUTH IHSREMOTE2026") == 0)
+                {
+                    autenticado = true;
+                    printk(KERN_INFO "Cliente autenticado!\n");
+                }
+                else
+                {
+                    printk(KERN_WARNING "Cliente rejeitado!\n");
+                    goto desconectar;
+                }
+
+                continue;
+            }
+
+            printk(KERN_INFO "%s\n", cmd);
+            parser_command(cmd);
         }
     }
+
+desconectar:
+
+    if (client_socket)
+    {
+        sock_release(client_socket);
+        client_socket = NULL;
+    }
+}
     printk(KERN_INFO "Thread TCP encerrada\n");
     return 0;
 }
-
-
 
 
 static int __init create_devices(void)
@@ -468,6 +476,13 @@ static int __init create_devices(void)
         return ret;
     }
     printk(KERN_INFO "Socket TCP criado com sucesso\n"); //Vai indicar que a criação do socket foi bem sucedida
+
+    int reuse = 1;
+    ret = sock_setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, KERNEL_SOCKPTR(&reuse), sizeof(reuse));
+    if (ret < 0) {
+        printk(KERN_ERR "Erro ao definir SO_REUSEADDR: %d\n", ret);
+    }
+
     msleep(50);
     //-----------------------------------------------------------
     //------------------Atribui Endereço ao Socket---------------
@@ -538,22 +553,26 @@ static void __exit destroy_devices(void)
 {
     printk(KERN_INFO "IHS: Modulo removido!\n"); //Vai printar quando o módulo for removido no log do kernel
     
-    if(client_socket)
+    // 1. Fecha o socket do servidor PRIMEIRO. Isso vai quebrar o "kernel_accept" bloqueante da thread
+    if(server_socket)
     {
-        sock_release(client_socket);
-        client_socket = NULL;
+        // Força a liberação e acorda qualquer chamada bloqueante nele
+        sock_release(server_socket);
+        server_socket = NULL;
     }
 
+    // 2. Agora que a thread foi acordada pelo fechamento do socket, paramos ela com segurança
     if(tcp_thread)
     {
         kthread_stop(tcp_thread);
         tcp_thread = NULL;
     }
 
-    if(server_socket)
+    // 3. Limpa o socket do cliente, se ainda existir
+    if(client_socket)
     {
-        sock_release(server_socket);
-        server_socket = NULL;
+        sock_release(client_socket);
+        client_socket = NULL;
     }
 
     
