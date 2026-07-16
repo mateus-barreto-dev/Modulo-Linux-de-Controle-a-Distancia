@@ -7,8 +7,8 @@ Funcionalidades atuais:
 - Clique esquerdo/direito
 - Scroll
 - Pressionar e liberar teclas
-- Digitação de texto
 - Comunicação TCP
+- Envio de Imagens da Tela da computador
 - Aplicativo Android em desenvolvimento
     1.  Desenvolvimento do Controle Remoto do Mouse Concluído
     2.  Desenvolvimento do Controle Remoto do Teclado (Concluído com ressalvas de que nem todas as teclas funcionam, mas as principais Shift, Crtl, Alt esquerdos, Tab, Backspace e Espaço funcionam)
