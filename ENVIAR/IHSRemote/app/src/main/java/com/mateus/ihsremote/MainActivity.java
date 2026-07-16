@@ -11,6 +11,7 @@ import androidx.core.view.WindowInsetsCompat;
 //----------------------------------------------------
 //---------------------TCP----------------------------
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
@@ -25,6 +26,7 @@ import android.view.GestureDetector;
 import android.view.MotionEvent;
 //----------------------------------------------------
 //-----------------FilaComandos-----------------------
+import java.net.SocketTimeoutException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 //----------------------------------------------------
@@ -32,8 +34,20 @@ import java.util.concurrent.LinkedBlockingQueue;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
-import android.view.KeyEvent;
 //----------------------------------------------------
+import androidx.appcompat.app.AlertDialog;
+
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.text.InputType;
+import com.google.android.material.snackbar.Snackbar;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+//--------------RecvImagens--------------------------
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 
 public class MainActivity extends AppCompatActivity {
     private final BlockingQueue<String> fila = new LinkedBlockingQueue<>(); //fila de comandos
@@ -46,6 +60,10 @@ public class MainActivity extends AppCompatActivity {
 
     private Thread tcpThread;
     private GestureDetector detector; //Detector de Gestos
+
+    private Thread udpThread;
+    private DatagramSocket udpSocket;
+    private ImageView imgScreen; // Mover para escopo global para facilitar o acesso
 
     private void offerCommand(String command) {
 
@@ -326,15 +344,211 @@ public class MainActivity extends AppCompatActivity {
                 offerCommand("KEY 44");
                 offerCommand("UP 42");
                 break;
+            case ' ':
+                offerCommand("DOWN 57");
+                offerCommand("UP 57");
+                break;
+            case '+':
+                offerCommand("DOWN 15"); //TAB
+                offerCommand("UP 15");
+                break;
+            case '!':
+                offerCommand("DOWN 42"); //SHIFT
+                break;
+            case '@':
+                offerCommand("UP 42");
+                break;
+            case '-':
+                offerCommand("DOWN 29"); //CTRL
+                break;
+            case '\'':
+                offerCommand("UP 29");
+                break;
+            case ',':
+                offerCommand("DOWN 56"); //ALT
+                break;
+            case '\"':
+                offerCommand("UP 56");
+                break;
+            case '?':
+                offerCommand("DOWN 28"); //Enter
+                offerCommand("UP 28");
+                break;
+            case ']':
+                offerCommand("DOWN 14"); //Enter
+                offerCommand("UP 14");
+                break;
+            default:
+                Log.d("IHS", "Char Estranho: " + c);
         }
     }
+    private void inicializarRecepcaoTCP() {
+        udpThread = new Thread(() -> {
+            Socket videoSocket = null;
+            InputStream inputStream = null;
+
+            try {
+                Log.d("IHS_TCP", "Iniciando cliente TCP de vídeo na porta 6666...");
+                // Conecta ao módulo do kernel na porta de vídeo
+                videoSocket = new Socket(socket.getInetAddress().getHostAddress(), 6666);
+                videoSocket.setTcpNoDelay(true); // Reduz latência desativando algoritmo de Nagle
+                inputStream = videoSocket.getInputStream();
+
+                byte[] headerBuffer = new byte[12];
+                byte[] rawFrameBuffer = null;
+                int currentAllocatedSize = 0;
+
+                // Arrays de trabalho para desfazimento de Tiling (Tile-X) e conversão de cor
+                int[] linearPixels = null;
+
+                while (!Thread.currentThread().isInterrupted()) {
+                    // 1. Lê o cabeçalho descritivo do Frame (12 bytes)
+                    int readHeaderBytes = 0;
+                    while (readHeaderBytes < 12) {
+                        int ret = inputStream.read(headerBuffer, readHeaderBytes, 12 - readHeaderBytes);
+                        if (ret == -1) throw new IOException("Conexão fechada pelo Kernel ao ler cabeçalho.");
+                        readHeaderBytes += ret;
+                    }
+
+                    // Desempacota o cabeçalho (Width, Height, BPP) - Little Endian padrão do Kernel
+                    java.nio.ByteBuffer wrapped = java.nio.ByteBuffer.wrap(headerBuffer).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    final int width = wrapped.getInt();
+                    final int height = wrapped.getInt();
+                    final int bpp = wrapped.getInt();
+                    final int frameSize = width * height * bpp;
+
+                    // Aloca ou reaproveita o buffer de pixels brutos recebidos
+                    if (rawFrameBuffer == null || currentAllocatedSize != frameSize) {
+                        rawFrameBuffer = new byte[frameSize];
+                        linearPixels = new int[width * height];
+                        currentAllocatedSize = frameSize;
+                    }
+
+                    // 2. Lê a totalidade dos bytes do frame de pixels
+                    int readPixelsBytes = 0;
+                    while (readPixelsBytes < frameSize) {
+                        int ret = inputStream.read(rawFrameBuffer, readPixelsBytes, frameSize - readPixelsBytes);
+                        if (ret == -1) throw new IOException("Conexão fechada pelo Kernel no meio do frame.");
+                        readPixelsBytes += ret;
+                    }
+
+                    // 3. Processa o desfazimento do Intel Tile-X (De-Tiling) + Correção de Cor BGRA -> RGBA
+                    int tileWidthPixels = 128; // 512 bytes / 4 bytes por pixel
+                    int tileHeightPixels = 8;
+                    int tilesX = width / tileWidthPixels;
+                    int tilesY = height / tileHeightPixels;
+
+                    int rawIdx = 0;
+
+                    for (int ty = 0; ty < tilesY; ty++) {
+                        for (int tx = 0; tx < tilesX; tx++) {
+
+                            // Processa o bloco atual de 8 linhas por 128 colunas
+                            for (int yLine = 0; yLine < tileHeightPixels; yLine++) {
+                                int targetY = (ty * tileHeightPixels) + yLine;
+                                int targetXStart = tx * tileWidthPixels;
+                                int targetOffset = (targetY * width) + targetXStart;
+
+                                for (int xCol = 0; xCol < tileWidthPixels; xCol++) {
+                                    // Pega os bytes no formato BGRA do Framebuffer do Kernel
+                                    int b = rawFrameBuffer[rawIdx++] & 0xFF;
+                                    int g = rawFrameBuffer[rawIdx++] & 0xFF;
+                                    int r = rawFrameBuffer[rawIdx++] & 0xFF;
+                                    int a = rawFrameBuffer[rawIdx++] & 0xFF; // Reservado/Alpha
+
+                                    // Remonta como RGBA para o Bitmap do Android (com canal Alpha fixo em 255)
+                                    linearPixels[targetOffset + xCol] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Envia para a thread principal atualizar a UI do dispositivo
+                    final int[] finalPixels = linearPixels;
+                    final Bitmap bitmapFrame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                    bitmapFrame.setPixels(finalPixels, 0, width, 0, 0, width, height);
+
+                    runOnUiThread(() -> {
+                        imgScreen.setImageBitmap(bitmapFrame);
+                    });
+                }
+
+            } catch (IOException e) {
+                Log.e("IHS_TCP", "Erro no processamento da conexão de vídeo: ", e);
+            } finally {
+                try {
+                    if (inputStream != null) inputStream.close();
+                    if (videoSocket != null) videoSocket.close();
+                } catch (IOException e) {
+                    Log.e("IHS_TCP", "Erro ao fechar conexões secundárias", e);
+                }
+            }
+        });
+        udpThread.start();
+    }
+
+    private void conectarServidor(String ip, int porta, String senha) {
+        if (tcpThread != null) {
+            tcpThread.interrupt();
+        }
+        if (udpThread != null) {
+            udpThread.interrupt();
+        }
+
+        tcpThread = new Thread(() -> {
+            try {
+                Log.d("IHS", "Tentando conectar em " + ip + ":" + porta);
+                socket = new Socket(ip, porta);
+                Log.d("IHS", "Socket criado com sucesso!");
+
+                writer = new PrintWriter(socket.getOutputStream(), true);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+
+                writer.println("AUTH " + senha);
+
+                String ipCelular = socket.getLocalAddress().getHostAddress();
+                Log.d("IHS", "Meu IP do celular enviado ao Kernel: " + ipCelular);
+                writer.println("CONNECT_UDP " + ipCelular + " 6666");
+
+                String respostaServidor = reader.readLine();
+                Log.d("IHS", "Resposta recebida do Kernel: " + respostaServidor);
+
+                if (respostaServidor != null && respostaServidor.contains("UDP_OK")) {
+                    runOnUiThread(() -> {
+                        Snackbar snackbar = Snackbar.make(findViewById(R.id.main), "Conexão TCP estabelecida com sucesso!", Snackbar.LENGTH_LONG);
+                        snackbar.setAnimationMode(Snackbar.ANIMATION_MODE_FADE);
+                        snackbar.show();
+                    });
+
+                    // Inicia o canal receptor UDP após o handshake TCP bem sucedido
+                    inicializarRecepcaoTCP();
+                }
+
+                while (!Thread.currentThread().isInterrupted()) {
+                    String sendCMD = fila.take();
+                    writer.println(sendCMD);
+                }
+            } catch (IOException e) {
+                Log.e("IHS", "Erro de IO na conexão", e);
+            } catch (InterruptedException e) {
+                Log.d("IHS", "Thread de conexão interrompida de forma limpa");
+            }
+        });
+        tcpThread.start();
+    }
+
     @Override
-    protected void onCreate(Bundle savedInstanceState) { //Cria tudo no aplicativo
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this); //ocupar a tela toda
-        setContentView(R.layout.activity_main); //Carregar o Arquivo xml
+        EdgeToEdge.enable(this);
+        setContentView(R.layout.activity_main);
+
         FloatingActionButton btnKeyboard = findViewById(R.id.btnKeyboard);
         EditText hiddenEdit = findViewById(R.id.hiddenEdit);
+
+        // Inicializa o atributo global
+        imgScreen = findViewById(R.id.imgScreen);
+        imgScreen.setImageResource(R.drawable.teste);
 
         btnKeyboard.setOnClickListener(v -> {
 
@@ -372,23 +586,16 @@ public class MainActivity extends AppCompatActivity {
         FloatingActionButton btnDisconnect = findViewById(R.id.btnDisconnect);
         btnDisconnect.setOnClickListener(v -> {
 
-            Log.d("IHS", "Desconectando");
-
+            Log.d("IHS", "Desconectando...");
             try {
-
-                if (writer != null)
-                    writer.close();
-
-                if (socket != null)
-                    socket.close();
-
-                if (tcpThread != null)
-                    tcpThread.interrupt();
-
+                if (writer != null) writer.close();
+                if (socket != null) socket.close();
+                if (udpSocket != null && !udpSocket.isClosed()) udpSocket.close();
+                if (tcpThread != null) tcpThread.interrupt();
+                if (udpThread != null) udpThread.interrupt();
             } catch (IOException e) {
-                Log.e("IHS", "Erro ao fechar conexão", e);
+                Log.e("IHS", "Erro ao fechar conexões", e);
             }
-            finish();
         });
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
@@ -467,51 +674,46 @@ public class MainActivity extends AppCompatActivity {
 
 
 
-        new Thread(() -> { //Cria uma thread para ficar executando a parte de conexão
+        FloatingActionButton btnConnect = findViewById(R.id.btnConnect);
+        btnConnect.setOnClickListener(v -> {
+            // Cria um layout linear vertical para empilhar as caixas de texto no Pop-Up
+            LinearLayout layoutDialog = new LinearLayout(MainActivity.this);
+            layoutDialog.setOrientation(LinearLayout.VERTICAL);
+            layoutDialog.setPadding(50, 40, 50, 10);
 
-            try {
+            final EditText inputIp = new EditText(MainActivity.this);
+            inputIp.setHint("Endereço IP (Ex: 10.0.0.181)");
+            inputIp.setInputType(InputType.TYPE_CLASS_TEXT);
+            layoutDialog.addView(inputIp);
 
-                Log.d("IHS", "Entrou no try");
+            final EditText inputPorta = new EditText(MainActivity.this);
+            inputPorta.setHint("Porta TCP (Ex: 5558)");
+            inputPorta.setInputType(InputType.TYPE_CLASS_NUMBER);
+            layoutDialog.addView(inputPorta);
 
-                socket = new Socket("10.0.0.181", 5558); //bind do socket com meu hostname e porta
+            final EditText inputSenha = new EditText(MainActivity.this);
+            inputSenha.setHint("Senha de Autenticação");
+            inputSenha.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            layoutDialog.addView(inputSenha);
 
-                Log.d("IHS", "Socket criado");
+            // Constrói o AlertDialog com os inputs criados
+            new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("Configurar Conexão IHS")
+                    .setView(layoutDialog)
+                    .setPositiveButton("Conectar", (dialog, which) -> {
+                        String ip = inputIp.getText().toString().trim();
+                        String portaStr = inputPorta.getText().toString().trim();
+                        String senha = inputSenha.getText().toString().trim();
 
-                writer = new PrintWriter(socket.getOutputStream(), true); //true faz com que assim que escrever envie para a saída
-                writer.println("AUTH IHSREMOTE2026");
+                        if (!ip.isEmpty() && !portaStr.isEmpty() && !senha.isEmpty()) {
+                            int porta = Integer.parseInt(portaStr);
 
-                Log.d("IHS", "Writer criado");
-
-                while (!Thread.currentThread().isInterrupted()) {
-                    String sendCMD = fila.take();
-                    writer.println(sendCMD);
-                }
-            } catch (IOException e) {
-                Log.e("IHS", "Erro de IO", e);
-            } catch (InterruptedException e) {
-                Log.e("IHS", "Erro de Runtime", e);
-                throw new RuntimeException(e);
-            }
-
-        }).start();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+                            // Dispara a conexão usando as variáveis fornecidas pelo usuário
+                            conectarServidor(ip, porta, senha);
+                        }
+                    })
+                    .setNegativeButton("Cancelar", null)
+                    .show();
+        });
    }
 }
