@@ -114,7 +114,7 @@ sudo rmmod ihs_remote
 Clone o repositório.
 
 ```bash
-git clone <URL_DO_REPOSITORIO>
+git clone <https://github.com/mateus-barreto-dev/Modulo-Linux-de-Controle-a-Distancia.git>
 ```
 
 Abra a pasta do projeto Android no Android Studio.
