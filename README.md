@@ -38,10 +38,10 @@ O aplicativo implementa as seguintes funcionalidades:
 ---
 
 # Arquitetura
+----------  <== Comandos <==  ---------
+| Módulo |                    |  App  |
+----------  ==>  Pixels  ==>  ---------  
 
-*(Adicionar diagrama da arquitetura.)*
-
----
 
 # Tecnologias Utilizadas
 
@@ -135,7 +135,7 @@ Após iniciar o aplicativo:
 
 # Demonstração
 
-*(Adicionar capturas de tela e/ou GIFs demonstrando o funcionamento do sistema.)*
+- Demonstrado em Sala de Aula
 
 ---
 
