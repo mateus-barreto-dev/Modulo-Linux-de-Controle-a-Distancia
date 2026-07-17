@@ -143,7 +143,7 @@ Ao abrir o aplicativo:
 
 - informe o endereço IP do computador;
 - informe a porta **5558**;
-- informe a senha de autenticação.
+- informe a senha de autenticação que é: "senha" (Tudo em minúsculo e sem espaços nem antes, nem depois)
 
 ---
 
