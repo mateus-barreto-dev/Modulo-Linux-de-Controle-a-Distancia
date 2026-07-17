@@ -395,3 +395,125 @@ Entre elas destacam-se:
 Executar essas tarefas utilizando Kernel Threads permite que cada serviço opere de forma independente e bloqueante, sem impedir a execução dos demais componentes do módulo.
 
 Essa abordagem simplifica o código, melhora a organização da aplicação e facilita o gerenciamento das conexões estabelecidas com o aplicativo Android.
+
+# 5. Dificuldades Encontradas
+
+Durante o desenvolvimento do projeto diversos desafios foram encontrados, principalmente por se tratar de uma aplicação executada inteiramente no espaço de kernel e que interage diretamente com componentes internos do sistema operacional.
+
+As principais dificuldades são descritas a seguir.
+
+---
+
+## 5.1 Captura da Tela
+
+A maior dificuldade encontrada durante o desenvolvimento foi descobrir uma forma confiável de capturar a tela diretamente do kernel.
+
+Inicialmente foram estudadas alternativas utilizando o framebuffer tradicional (`fbdev`), porém essa abordagem mostrou-se limitada, pois muitos sistemas atuais utilizam o DRM (Direct Rendering Manager) como principal infraestrutura gráfica.
+
+Após diversos testes, optou-se por utilizar diretamente a infraestrutura DRM, obtendo acesso ao framebuffer associado ao CRTC principal.
+
+Outra dificuldade foi compreender a organização interna dos objetos DRM, como:
+
+- CRTC;
+- Primary Plane;
+- Framebuffer;
+- GEM Objects.
+
+Foi necessário estudar a documentação do subsistema DRM e analisar diversos exemplos presentes no código-fonte do kernel Linux para compreender o caminho até os pixels armazenados na memória de vídeo.
+
+---
+
+## 5.2 Organização do Framebuffer
+
+Mesmo após conseguir acessar a memória gráfica, a imagem obtida inicialmente apresentava completamente corrompida.
+
+Durante os testes foi observado que a GPU Intel não armazenava os pixels de forma linear na memória.
+
+Em vez disso, a memória encontrava-se organizada em pequenos blocos (tiles), utilizados para melhorar o desempenho do hardware.
+
+Foi necessário analisar cuidadosamente o padrão de organização da memória e desenvolver um algoritmo capaz de reconstruir corretamente a posição de cada pixel.
+
+Após a reorganização espacial dos pixels, tornou-se possível reconstruir corretamente a imagem no aplicativo Android.
+
+---
+
+## 5.3 Comunicação Kernel ↔ Android
+
+Outro desafio importante foi estabelecer uma comunicação estável entre o módulo Linux e o aplicativo Android.
+
+Inicialmente foi considerada a utilização de apenas uma conexão TCP para transmitir comandos e imagens.
+
+Entretanto, verificou-se que o grande volume de dados das imagens causava atrasos perceptíveis no envio dos comandos de mouse e teclado.
+
+Como solução, optou-se pela utilização de duas conexões TCP independentes:
+
+- uma dedicada aos comandos de controle;
+- outra dedicada exclusivamente à transmissão da tela.
+
+Também foi necessário implementar um mecanismo simples de autenticação e um processo de sincronização para que a transmissão da tela somente fosse iniciada após o estabelecimento da conexão de controle.
+
+---
+
+## 5.4 Sincronização das Threads
+
+O módulo utiliza múltiplas Kernel Threads executando simultaneamente.
+
+Uma thread permanece aguardando conexões de controle, enquanto outra realiza continuamente a captura e transmissão das imagens.
+
+Durante o desenvolvimento foram encontrados problemas relacionados ao encerramento dessas threads quando o módulo era removido.
+
+Inicialmente algumas chamadas bloqueantes impediam o encerramento correto do módulo, ocasionando erros durante a remoção.
+
+A solução adotada consistiu em fechar previamente os sockets responsáveis pelas conexões, fazendo com que as chamadas bloqueantes retornassem imediatamente e permitissem o encerramento seguro das threads utilizando `kthread_stop()`.
+
+Essa abordagem tornou o carregamento e descarregamento do módulo significativamente mais robusto.
+
+---
+
+# 6. Resultados Obtidos
+
+Ao final do desenvolvimento foi possível implementar um sistema funcional capaz de controlar remotamente um computador Linux diretamente através de um aplicativo Android.
+
+O módulo desenvolvido foi capaz de:
+
+- criar um mouse virtual utilizando o Linux Input;
+- criar um teclado virtual utilizando o Linux Input;
+- receber comandos enviados pela rede;
+- interpretar os comandos recebidos;
+- capturar continuamente a tela utilizando o DRM;
+- transmitir as imagens em tempo real para o aplicativo Android.
+
+O aplicativo Android, por sua vez, foi capaz de:
+
+- estabelecer conexão com o módulo;
+- autenticar o usuário;
+- enviar comandos de mouse e teclado;
+- receber continuamente as imagens transmitidas pelo computador;
+- reconstruir corretamente os quadros recebidos;
+- exibir a tela remota em tempo real.
+
+Durante os testes foi possível controlar o computador integralmente utilizando apenas o celular, incluindo movimentação do cursor, cliques, rolagem da roda do mouse, digitação e visualização da tela.
+
+Os objetivos inicialmente propostos para o projeto foram, portanto, alcançados com sucesso.
+
+---
+
+# 7. Trabalhos Futuros
+
+Embora o sistema desenvolvido seja plenamente funcional, diversas melhorias podem ser implementadas em trabalhos futuros.
+
+Entre elas destacam-se:
+
+- implementação de compressão de imagem para reduzir o volume de dados transmitidos;
+- utilização de protocolos de transmissão mais adequados para vídeo em tempo real, como UDP com mecanismos próprios de recuperação de perdas;
+- suporte a múltiplos monitores;
+- implementação de escalonamento automático da resolução transmitida conforme a largura de banda disponível;
+- melhoria do teclado virtual, incluindo suporte completo a caracteres especiais e atalhos do sistema operacional;
+- adição de novos gestos para facilitar a interação com o computador;
+- autenticação mais robusta utilizando criptografia e troca segura de chaves;
+- transmissão protegida por TLS;
+- adaptação para GPUs de outros fabricantes, como AMD e NVIDIA;
+- desenvolvimento de uma interface gráfica mais completa para o aplicativo Android;
+- otimizações adicionais visando reduzir a latência entre a captura da tela e sua exibição no dispositivo móvel.
+
+Essas melhorias podem ampliar a compatibilidade do sistema, aumentar seu desempenho e torná-lo mais adequado para aplicações em ambientes reais.
